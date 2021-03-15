@@ -34,6 +34,7 @@
           :ofText="ofText"
           :pageText="pageText"
           :allText="allText"
+          :info-fn="paginationInfoFn"
         ></vgt-pagination>
       </slot>
       <div slot="internal-table-actions">
@@ -92,6 +93,7 @@
             :all-selected-indeterminate="allSelectedIndeterminate"
             :mode="mode"
             :sortable="sortable"
+            :multiple-column-sort="multipleColumnSort"
             :typed-columns="typedColumns"
             :getClasses="getClasses"
             :searchEnabled="searchEnabled"
@@ -148,6 +150,7 @@
             :all-selected-indeterminate="allSelectedIndeterminate"
             :mode="mode"
             :sortable="sortable"
+            :multiple-column-sort="multipleColumnSort"
             :typed-columns="typedColumns"
             :getClasses="getClasses"
             :searchEnabled="searchEnabled"
@@ -346,6 +349,7 @@
           :ofText="ofText"
           :pageText="pageText"
           :allText="allText"
+          :info-fn="paginationInfoFn"
         ></vgt-pagination>
       </slot>
     </div>
@@ -353,14 +357,13 @@
 </template>
 
 <script>
-import each from 'lodash.foreach';
-import assign from 'lodash.assign';
-import cloneDeep from 'lodash.clonedeep';
-import filter from 'lodash.filter';
+import {
+  DEFAULT_SORT_TYPE,
+  SORT_TYPES,
+} from './utils/constants';
 import isEqual from 'lodash.isequal';
-import diacriticless from 'diacriticless';
 import defaultType from './types/default';
-import VgtPagination from './VgtPagination.vue';
+import VgtPagination from './pagination/VgtPagination.vue';
 import VgtGlobalSearch from './VgtGlobalSearch.vue';
 import VgtTableHeader from './VgtTableHeader.vue';
 import VgtHeaderRow from './VgtHeaderRow.vue';
@@ -371,7 +374,7 @@ import * as CoreDataTypes from './types/index';
 
 const dataTypes = {};
 const coreDataTypes = CoreDataTypes.default;
-each(Object.keys(coreDataTypes), (key) => {
+Object.keys(coreDataTypes).forEach((key) => {
   const compName = key.replace(/^\.\//, '').replace(/\.js/, '');
   dataTypes[compName] = coreDataTypes[key].default;
 });
@@ -423,6 +426,7 @@ export default {
       default() {
         return {
           enabled: true,
+          multipleColumns: true,
           initialSortBy: {},
         };
       },
@@ -433,12 +437,14 @@ export default {
       default() {
         return {
           enabled: false,
+          position: 'bottom',
           perPage: 10,
           perPageDropdown: null,
           perPageDropdownEnabled: true,
           position: 'bottom',
           dropdownAllowAll: true,
           mode: 'records', // or pages
+          infoFn: null,
         };
       },
     },
@@ -492,6 +498,7 @@ export default {
     // internal sort options
     sortable: true,
     defaultSortBy: null,
+    multipleColumnSort: true,
 
     // internal search options
     searchEnabled: false,
@@ -509,6 +516,7 @@ export default {
     customRowsPerPageDropdown: [],
     paginateDropdownAllowAll: true,
     paginationMode: 'records',
+    paginationInfoFn: null,
 
     currentPage: 1,
     currentPerPage: 10,
@@ -667,8 +675,8 @@ export default {
 
     selectedPageRows() {
       const selectedRows = [];
-      each(this.paginated, (headerRow) => {
-        each(headerRow.children, (row) => {
+      this.paginated.forEach((headerRow) => {
+        headerRow.children.forEach((row) => {
           if (row.vgtSelected) {
             selectedRows.push(row);
           }
@@ -679,8 +687,8 @@ export default {
 
     selectedRows() {
       const selectedRows = [];
-      each(this.processedRows, (headerRow) => {
-        each(headerRow.children, (row) => {
+      this.processedRows.forEach((headerRow) => {
+        headerRow.children.forEach((row) => {
           if (row.vgtSelected) {
             selectedRows.push(row);
           }
@@ -726,17 +734,17 @@ export default {
       return false;
     },
     totalRowCount() {
-      let total = 0;
-      each(this.processedRows, (headerRow) => {
-        total += headerRow.children ? headerRow.children.length : 0;
-      });
+      const total = this.processedRows.reduce((total, headerRow) => {
+        const childrenCount = headerRow.children ? headerRow.children.length : 0;
+        return total + childrenCount;
+      }, 0);
       return total;
     },
     totalPageRowCount() {
-      let total = 0;
-      each(this.paginated, (headerRow) => {
-        total += headerRow.children ? headerRow.children.length : 0;
-      });
+      const total = this.paginated.reduce((total, headerRow) => {
+        const childrenCount = headerRow.children ? headerRow.children.length : 0;
+        return total + childrenCount;
+      }, 0);
       return total;
     },
     wrapStyleClasses() {
@@ -794,12 +802,13 @@ export default {
         // here also we need to de-construct and then
         // re-construct the rows.
         const allRows = [];
-        each(this.filteredRows, (headerRow) => {
+        this.filteredRows.forEach((headerRow) => {
           allRows.push(...headerRow.children);
         });
         const filteredRows = [];
-        each(allRows, (row) => {
-          each(this.columns, (col) => {
+        allRows.forEach((row) => {
+          for (let i = 0; i < this.columns.length; i += 1) {
+            const col = this.columns[i];
             // if col does not have search disabled,
             if (!col.globalSearchDisabled) {
               // if a search function is provided,
@@ -814,7 +823,7 @@ export default {
                 );
                 if (foundMatch) {
                   filteredRows.push(row);
-                  return false; // break the loop
+                  break; // break the loop
                 }
               } else {
                 // comparison
@@ -825,11 +834,11 @@ export default {
                 );
                 if (matched) {
                   filteredRows.push(row);
-                  return false; // break loop
+                  break; // break loop
                 }
               }
             }
-          });
+          }
         });
 
         // this is where we emit on search
@@ -841,11 +850,12 @@ export default {
         // here we need to reconstruct the nested structure
         // of rows
         computedRows = [];
-        each(this.filteredRows, (headerRow) => {
+        this.filteredRows.forEach((headerRow) => {
           const i = headerRow.vgt_header_id;
-          const children = filter(filteredRows, ['vgt_id', i]);
+          const children = filteredRows.filter((r) => r.vgt_id === i);
+          console.log(children);
           if (children.length) {
-            const newHeaderRow = cloneDeep(headerRow);
+            const newHeaderRow = JSON.parse(JSON.stringify(headerRow));
             newHeaderRow.children = children;
             computedRows.push(newHeaderRow);
           }
@@ -858,24 +868,31 @@ export default {
             //* we need to get column for each sort
             let sortValue;
             for (let i = 0; i < this.sorts.length; i += 1) {
-              const column = this.getColumnForField(this.sorts[i].field);
-              const xvalue = this.collect(xRow, this.sorts[i].field);
-              const yvalue = this.collect(yRow, this.sorts[i].field);
+              const srt = this.sorts[i];
 
-              //* if a custom sort function has been provided we use that
-              const { sortFn } = column;
-              if (sortFn && typeof sortFn === 'function') {
-                sortValue =
-                  sortValue ||
-                  sortFn(xvalue, yvalue, column, xRow, yRow) *
-                    (this.sorts[i].type === 'desc' ? -1 : 1);
-              } else {
-              //* else we use our own sort
-              sortValue =
-                sortValue ||
-                column.typeDef.compare(xvalue, yvalue, column) *
-                  (this.sorts[i].type === 'desc' ? -1 : 1);
-          }
+              if (srt.type === SORT_TYPES.None) {
+                //* if no sort, we need to use the original index to sort.
+                sortValue = sortValue || (xRow.originalIndex - yRow.originalIndex);
+              } else{
+                const column = this.getColumnForField(srt.field);
+                const xvalue = this.collect(xRow, srt.field);
+                const yvalue = this.collect(yRow, srt.field);
+  
+                //* if a custom sort function has been provided we use that
+                const { sortFn } = column;
+                if (sortFn && typeof sortFn === 'function') {
+                  sortValue =
+                    sortValue ||
+                    sortFn(xvalue, yvalue, column, xRow, yRow) *
+                      (srt.type === SORT_TYPES.Descending ? -1 : 1);
+                } else {
+                  //* else we use our own sort
+                  sortValue =
+                    sortValue ||
+                    column.typeDef.compare(xvalue, yvalue, column) *
+                      (srt.type === SORT_TYPES.Descending ? -1 : 1);
+                }
+              }
             }
             return sortValue;
           });
@@ -900,7 +917,7 @@ export default {
 
       //* flatten the rows for paging.
       let paginatedRows = [];
-      each(this.processedRows, (childRows) => {
+      this.processedRows.forEach((childRows) => {
         //* only add headers when group options are enabled.
         if (this.groupOptions.enabled) {
           paginatedRows.push(childRows);
@@ -935,7 +952,7 @@ export default {
         //* header row?
         if (flatRow.vgt_header_id !== undefined) {
           this.handleExpanded(flatRow);
-          const newHeaderRow = cloneDeep(flatRow);
+          const newHeaderRow = JSON.parse(JSON.stringify(flatRow));
           newHeaderRow.children = [];
           reconstructedRows.push(newHeaderRow);
         } else {
@@ -944,7 +961,7 @@ export default {
           if (!hRow) {
             hRow = this.processedRows.find(r => r.vgt_header_id === flatRow.vgt_id);
             if (hRow) {
-              hRow = cloneDeep(hRow);
+              hRow = JSON.parse(JSON.stringify(hRow));
               hRow.children = [];
               reconstructedRows.push(hRow);
             }
@@ -956,7 +973,7 @@ export default {
     },
 
     originalRows() {
-      const rows = cloneDeep(this.rows);
+      const rows = JSON.parse(JSON.stringify(this.rows));
       let nestedRows = [];
       if (!this.groupOptions.enabled) {
         nestedRows = this.handleGrouped([
@@ -971,8 +988,8 @@ export default {
       // we need to preserve the original index of
       // rows so lets do that
       let index = 0;
-      each(nestedRows, (headerRow, i) => {
-        each(headerRow.children, (row, j) => {
+      nestedRows.forEach((headerRow) => {
+        headerRow.children.forEach((row) => {
           row.originalIndex = index++;
         });
       });
@@ -981,7 +998,7 @@ export default {
     },
 
     typedColumns() {
-      const columns = assign(this.columns, []);
+      const columns = this.columns;
       for (let i = 0; i < this.columns.length; i++) {
         const column = columns[i];
         column.typeDef = this.dataTypes[column.type] || defaultType;
@@ -1069,8 +1086,8 @@ export default {
     unselectAllInternal(forceAll) {
       const rows =
         this.selectAllByPage && !forceAll ? this.paginated : this.filteredRows;
-      each(rows, (headerRow, i) => {
-        each(headerRow.children, (row, j) => {
+      rows.forEach((headerRow, i) => {
+        headerRow.children.forEach((row, j) => {
           this.$set(row, 'vgtSelected', false);
         });
       });
@@ -1083,8 +1100,8 @@ export default {
         return;
       }
       const rows = this.selectAllByPage ? this.paginated : this.filteredRows;
-      each(rows, (headerRow) => {
-        each(headerRow.children, (row) => {
+      rows.forEach((headerRow) => {
+        headerRow.children.forEach((row) => {
           this.$set(row, 'vgtSelected', true);
         });
       });
@@ -1092,19 +1109,19 @@ export default {
     },
 
     toggleSelectGroup(event, headerRow) {
-      each(headerRow.children, (row) => {
+      headerRow.children.forEach((row) => {
         this.$set(row, 'vgtSelected', event.checked);
       });
     },
 
     changePage(value) {
-      let { enabled, position } = this.paginationOptions
+      const enabled = this.paginate;
       let { paginationBottom, paginationTop } = this.$refs
       if (enabled) {
-        if ((position === 'top' || position === 'both') && paginationTop) {
+        if (this.paginateOnTop && paginationTop) {
           paginationTop.currentPage = value
         }
-        if ((position === 'bottom' || position === 'both') && paginationBottom) {
+        if (this.paginateOnBottom && paginationBottom) {
           paginationBottom.currentPage = value
         }
         // we also need to set the currentPage
@@ -1235,7 +1252,7 @@ export default {
         this.handleSearch();
         // we reset the filteredRows here because
         // we want to search across everything.
-        this.filteredRows = cloneDeep(this.originalRows);
+        this.filteredRows = JSON.parse(JSON.stringify(this.originalRows));
         this.forceSearch = true;
         this.sortChanged = true;
       }
@@ -1349,7 +1366,7 @@ export default {
       // this is invoked either as a result of changing filters
       // or as a result of modifying rows.
       this.columnFilters = columnFilters;
-      let computedRows = cloneDeep(this.originalRows);
+      let computedRows = JSON.parse(JSON.stringify(this.originalRows));
 
       // do we have a filter to care about?
       // if not we don't need to do anything
@@ -1391,7 +1408,7 @@ export default {
         for (let i = 0; i < this.typedColumns.length; i++) {
           const col = this.typedColumns[i];
           if (this.columnFilters[fieldKey(col.field)]) {
-            computedRows = each(computedRows, (headerRow) => {
+            computedRows.forEach((headerRow) => {
               const newChildren = headerRow.children.filter((row) => {
                 // If column has a custom filter, use that.
                 if (
@@ -1460,7 +1477,7 @@ export default {
     },
 
     handleGrouped(originalRows) {
-      each(originalRows, (headerRow, i) => {
+      originalRows.forEach((headerRow, i) => {
         headerRow.vgt_header_id = i;
         if (
           this.groupOptions.maintainExpanded &&
@@ -1468,7 +1485,7 @@ export default {
         ) {
           this.$set(headerRow, 'vgtIsExpanded', true);
         }
-        each(headerRow.children, (childRow) => {
+        headerRow.children.forEach((childRow) => {
           childRow.vgt_id = i;
         });
       });
@@ -1494,6 +1511,7 @@ export default {
         allLabel,
         setCurrentPage,
         mode,
+        infoFn,
       } = this.paginationOptions;
 
       if (typeof enabled === 'boolean') {
@@ -1560,6 +1578,10 @@ export default {
           this.changePage(setCurrentPage);
         }, 500);
       }
+
+      if (typeof infoFn === 'function') {
+        this.paginationInfoFn = infoFn;
+      }
     },
 
     initializeSearch() {
@@ -1598,25 +1620,30 @@ export default {
     },
 
     initializeSort() {
-      const { enabled, initialSortBy } = this.sortOptions;
+      const { enabled, initialSortBy, multipleColumns } = this.sortOptions;
+      const initSortBy = JSON.parse(JSON.stringify(initialSortBy || {}));
 
       if (typeof enabled === 'boolean') {
         this.sortable = enabled;
       }
 
+      if (typeof multipleColumns === 'boolean') {
+        this.multipleColumnSort = multipleColumns;
+      }
+
       //* initialSortBy can be an array or an object
-      if (typeof initialSortBy === 'object') {
+      if (typeof initSortBy === 'object') {
         const ref = this.fixedHeader
           ? this.$refs['table-header-secondary']
           : this.$refs['table-header-primary'];
-        if (Array.isArray(initialSortBy)) {
-          ref.setInitialSort(initialSortBy);
+        if (Array.isArray(initSortBy)) {
+          ref.setInitialSort(initSortBy);
         } else {
           const hasField = Object.prototype.hasOwnProperty.call(
-            initialSortBy,
+            initSortBy,
             'field'
           );
-          if (hasField) ref.setInitialSort([initialSortBy]);
+          if (hasField) ref.setInitialSort([initSortBy]);
         }
       }
     },
