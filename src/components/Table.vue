@@ -34,6 +34,7 @@
           :ofText="ofText"
           :pageText="pageText"
           :allText="allText"
+          :info-fn="paginationInfoFn"
         ></vgt-pagination>
       </slot>
       <div slot="internal-table-actions">
@@ -92,6 +93,7 @@
             :all-selected-indeterminate="allSelectedIndeterminate"
             :mode="mode"
             :sortable="sortable"
+            :multiple-column-sort="multipleColumnSort"
             :typed-columns="typedColumns"
             :getClasses="getClasses"
             :searchEnabled="searchEnabled"
@@ -148,6 +150,7 @@
             :all-selected-indeterminate="allSelectedIndeterminate"
             :mode="mode"
             :sortable="sortable"
+            :multiple-column-sort="multipleColumnSort"
             :typed-columns="typedColumns"
             :getClasses="getClasses"
             :searchEnabled="searchEnabled"
@@ -198,7 +201,6 @@
               :full-colspan="fullColspan"
               :groupIndex="hIndex"
               :groupOptions="groupOptions"
-              :groupChildObject="groupChildObject"
               @on-select-group-change="toggleSelectGroup($event, headerRow)"
             >
               <template
@@ -218,7 +220,7 @@
             <!-- normal rows here. we loop over all rows -->
             <tr
               v-if="groupOptions.collapsable ? headerRow.vgtIsExpanded : true"
-              v-for="(row, index) in headerRow[groupChildObject]"
+              v-for="(row, index) in headerRow.children"
               :key="row.originalIndex"
               :class="getRowStyleClass(row)"
               :ref="`row-${row.originalIndex}`"
@@ -281,7 +283,6 @@
               :full-colspan="fullColspan"
               :groupIndex="index"
               :groupOptions="groupOptions"
-              :groupChildObject="groupChildObject"
               @on-select-group-change="toggleSelectGroup($event, headerRow)"
             >
               <template
@@ -348,6 +349,7 @@
           :ofText="ofText"
           :pageText="pageText"
           :allText="allText"
+          :info-fn="paginationInfoFn"
         ></vgt-pagination>
       </slot>
     </div>
@@ -355,14 +357,13 @@
 </template>
 
 <script>
-import each from 'lodash.foreach';
-import assign from 'lodash.assign';
-import cloneDeep from 'lodash.clonedeep';
-import filter from 'lodash.filter';
+import {
+  DEFAULT_SORT_TYPE,
+  SORT_TYPES,
+} from './utils/constants';
 import isEqual from 'lodash.isequal';
-import diacriticless from 'diacriticless';
 import defaultType from './types/default';
-import VgtPagination from './VgtPagination.vue';
+import VgtPagination from './pagination/VgtPagination.vue';
 import VgtGlobalSearch from './VgtGlobalSearch.vue';
 import VgtTableHeader from './VgtTableHeader.vue';
 import VgtHeaderRow from './VgtHeaderRow.vue';
@@ -373,7 +374,7 @@ import * as CoreDataTypes from './types/index';
 
 const dataTypes = {};
 const coreDataTypes = CoreDataTypes.default;
-each(Object.keys(coreDataTypes), (key) => {
+Object.keys(coreDataTypes).forEach((key) => {
   const compName = key.replace(/^\.\//, '').replace(/\.js/, '');
   dataTypes[compName] = coreDataTypes[key].default;
 });
@@ -425,6 +426,7 @@ export default {
       default() {
         return {
           enabled: true,
+          multipleColumns: true,
           initialSortBy: {},
         };
       },
@@ -435,12 +437,14 @@ export default {
       default() {
         return {
           enabled: false,
+          position: 'bottom',
           perPage: 10,
           perPageDropdown: null,
           perPageDropdownEnabled: true,
           position: 'bottom',
           dropdownAllowAll: true,
           mode: 'records', // or pages
+          infoFn: null,
         };
       },
     },
@@ -494,6 +498,7 @@ export default {
     // internal sort options
     sortable: true,
     defaultSortBy: null,
+    multipleColumnSort: true,
 
     // internal search options
     searchEnabled: false,
@@ -511,6 +516,7 @@ export default {
     customRowsPerPageDropdown: [],
     paginateDropdownAllowAll: true,
     paginationMode: 'records',
+    paginationInfoFn: null,
 
     currentPage: 1,
     currentPerPage: 10,
@@ -627,11 +633,9 @@ export default {
     showEmptySlot() {
       if (!this.paginated.length) return true;
 
-      const { groupChildObject } = this;
-
       if (
         this.paginated[0].label === 'no groups' &&
-        !this.paginated[0][groupChildObject].length
+        !this.paginated[0].children.length
       ) {
         return true;
       }
@@ -671,9 +675,8 @@ export default {
 
     selectedPageRows() {
       const selectedRows = [];
-      const { groupChildObject } = this;
-      each(this.paginated, (headerRow) => {
-        each(headerRow[groupChildObject], (row) => {
+      this.paginated.forEach((headerRow) => {
+        headerRow.children.forEach((row) => {
           if (row.vgtSelected) {
             selectedRows.push(row);
           }
@@ -684,9 +687,8 @@ export default {
 
     selectedRows() {
       const selectedRows = [];
-      const { groupChildObject } = this;
-      each(this.processedRows, (headerRow) => {
-        each(headerRow[groupChildObject], (row) => {
+      this.processedRows.forEach((headerRow) => {
+        headerRow.children.forEach((row) => {
           if (row.vgtSelected) {
             selectedRows.push(row);
           }
@@ -731,23 +733,18 @@ export default {
       }
       return false;
     },
-    groupChildObject() {
-      return this.groupOptions.customChildObject || 'children'
-    },
     totalRowCount() {
-      const { groupChildObject } = this;
-      let total = 0;
-      each(this.processedRows, (headerRow) => {
-        total += headerRow[groupChildObject] ? headerRow[groupChildObject].length : 0;
-      });
+      const total = this.processedRows.reduce((total, headerRow) => {
+        const childrenCount = headerRow.children ? headerRow.children.length : 0;
+        return total + childrenCount;
+      }, 0);
       return total;
     },
     totalPageRowCount() {
-      let total = 0;
-      const { groupChildObject } = this;
-      each(this.paginated, (headerRow) => {
-        total += headerRow[groupChildObject] ? headerRow[groupChildObject].length : 0;
-      });
+      const total = this.paginated.reduce((total, headerRow) => {
+        const childrenCount = headerRow.children ? headerRow.children.length : 0;
+        return total + childrenCount;
+      }, 0);
       return total;
     },
     wrapStyleClasses() {
@@ -805,13 +802,13 @@ export default {
         // here also we need to de-construct and then
         // re-construct the rows.
         const allRows = [];
-        const { groupChildObject } = this;
-        each(this.filteredRows, (headerRow) => {
-          allRows.push(...headerRow[groupChildObject]);
+        this.filteredRows.forEach((headerRow) => {
+          allRows.push(...headerRow.children);
         });
         const filteredRows = [];
-        each(allRows, (row) => {
-          each(this.columns, (col) => {
+        allRows.forEach((row) => {
+          for (let i = 0; i < this.columns.length; i += 1) {
+            const col = this.columns[i];
             // if col does not have search disabled,
             if (!col.globalSearchDisabled) {
               // if a search function is provided,
@@ -826,7 +823,7 @@ export default {
                 );
                 if (foundMatch) {
                   filteredRows.push(row);
-                  return false; // break the loop
+                  break; // break the loop
                 }
               } else {
                 // comparison
@@ -837,11 +834,11 @@ export default {
                 );
                 if (matched) {
                   filteredRows.push(row);
-                  return false; // break loop
+                  break; // break loop
                 }
               }
             }
-          });
+          }
         });
 
         // this is where we emit on search
@@ -853,12 +850,13 @@ export default {
         // here we need to reconstruct the nested structure
         // of rows
         computedRows = [];
-        each(this.filteredRows, (headerRow) => {
+        this.filteredRows.forEach((headerRow) => {
           const i = headerRow.vgt_header_id;
-          const children = filter(filteredRows, ['vgt_id', i]);
+          const children = filteredRows.filter((r) => r.vgt_id === i);
+          console.log(children);
           if (children.length) {
-            const newHeaderRow = cloneDeep(headerRow);
-            newHeaderRow[groupChildObject] = children;
+            const newHeaderRow = JSON.parse(JSON.stringify(headerRow));
+            newHeaderRow.children = children;
             computedRows.push(newHeaderRow);
           }
         });
@@ -866,28 +864,35 @@ export default {
       if (this.sorts.length) {
         //* we need to sort
         computedRows.forEach((cRows) => {
-          cRows[this.groupChildObject].sort((xRow, yRow) => {
+          cRows.children.sort((xRow, yRow) => {
             //* we need to get column for each sort
             let sortValue;
             for (let i = 0; i < this.sorts.length; i += 1) {
-              const column = this.getColumnForField(this.sorts[i].field);
-              const xvalue = this.collect(xRow, this.sorts[i].field);
-              const yvalue = this.collect(yRow, this.sorts[i].field);
+              const srt = this.sorts[i];
 
-              //* if a custom sort function has been provided we use that
-              const { sortFn } = column;
-              if (sortFn && typeof sortFn === 'function') {
-                sortValue =
-                  sortValue ||
-                  sortFn(xvalue, yvalue, column, xRow, yRow) *
-                    (this.sorts[i].type === 'desc' ? -1 : 1);
-              } else {
-              //* else we use our own sort
-              sortValue =
-                sortValue ||
-                column.typeDef.compare(xvalue, yvalue, column) *
-                  (this.sorts[i].type === 'desc' ? -1 : 1);
-          }
+              if (srt.type === SORT_TYPES.None) {
+                //* if no sort, we need to use the original index to sort.
+                sortValue = sortValue || (xRow.originalIndex - yRow.originalIndex);
+              } else{
+                const column = this.getColumnForField(srt.field);
+                const xvalue = this.collect(xRow, srt.field);
+                const yvalue = this.collect(yRow, srt.field);
+  
+                //* if a custom sort function has been provided we use that
+                const { sortFn } = column;
+                if (sortFn && typeof sortFn === 'function') {
+                  sortValue =
+                    sortValue ||
+                    sortFn(xvalue, yvalue, column, xRow, yRow) *
+                      (srt.type === SORT_TYPES.Descending ? -1 : 1);
+                } else {
+                  //* else we use our own sort
+                  sortValue =
+                    sortValue ||
+                    column.typeDef.compare(xvalue, yvalue, column) *
+                      (srt.type === SORT_TYPES.Descending ? -1 : 1);
+                }
+              }
             }
             return sortValue;
           });
@@ -904,7 +909,6 @@ export default {
     },
 
     paginated() {
-      const { groupChildObject } = this;
       if (!this.processedRows.length) return [];
 
       if (this.mode === 'remote') {
@@ -913,12 +917,12 @@ export default {
 
       //* flatten the rows for paging.
       let paginatedRows = [];
-      each(this.processedRows, (childRows) => {
+      this.processedRows.forEach((childRows) => {
         //* only add headers when group options are enabled.
         if (this.groupOptions.enabled) {
           paginatedRows.push(childRows);
         }
-        paginatedRows.push(...childRows[groupChildObject]);
+        paginatedRows.push(...childRows.children);
       });
       
       if (this.paginate) {
@@ -948,8 +952,8 @@ export default {
         //* header row?
         if (flatRow.vgt_header_id !== undefined) {
           this.handleExpanded(flatRow);
-          const newHeaderRow = cloneDeep(flatRow);
-          newHeaderRow[groupChildObject] = [];
+          const newHeaderRow = JSON.parse(JSON.stringify(flatRow));
+          newHeaderRow.children = [];
           reconstructedRows.push(newHeaderRow);
         } else {
           //* child row
@@ -957,20 +961,19 @@ export default {
           if (!hRow) {
             hRow = this.processedRows.find(r => r.vgt_header_id === flatRow.vgt_id);
             if (hRow) {
-              hRow = cloneDeep(hRow);
-              hRow[groupChildObject] = [];
+              hRow = JSON.parse(JSON.stringify(hRow));
+              hRow.children = [];
               reconstructedRows.push(hRow);
             }
           }
-          hRow[groupChildObject].push(flatRow);
+          hRow.children.push(flatRow);
         }
       });
       return reconstructedRows;
     },
 
     originalRows() {
-      const rows = cloneDeep(this.rows);
-      const { groupChildObject } = this;
+      const rows = JSON.parse(JSON.stringify(this.rows));
       let nestedRows = [];
       if (!this.groupOptions.enabled) {
         nestedRows = this.handleGrouped([
@@ -985,8 +988,8 @@ export default {
       // we need to preserve the original index of
       // rows so lets do that
       let index = 0;
-      each(nestedRows, (headerRow, i) => {
-        each(headerRow[groupChildObject], (row, j) => {
+      nestedRows.forEach((headerRow) => {
+        headerRow.children.forEach((row) => {
           row.originalIndex = index++;
         });
       });
@@ -995,7 +998,7 @@ export default {
     },
 
     typedColumns() {
-      const columns = assign(this.columns, []);
+      const columns = this.columns;
       for (let i = 0; i < this.columns.length; i++) {
         const column = columns[i];
         column.typeDef = this.dataTypes[column.type] || defaultType;
@@ -1083,9 +1086,8 @@ export default {
     unselectAllInternal(forceAll) {
       const rows =
         this.selectAllByPage && !forceAll ? this.paginated : this.filteredRows;
-      const { groupChildObject } = this;
-      each(rows, (headerRow, i) => {
-        each(headerRow[groupChildObject], (row, j) => {
+      rows.forEach((headerRow, i) => {
+        headerRow.children.forEach((row, j) => {
           this.$set(row, 'vgtSelected', false);
         });
       });
@@ -1098,9 +1100,8 @@ export default {
         return;
       }
       const rows = this.selectAllByPage ? this.paginated : this.filteredRows;
-      const { groupChildObject } = this;
-      each(rows, (headerRow) => {
-        each(headerRow[groupChildObject], (row) => {
+      rows.forEach((headerRow) => {
+        headerRow.children.forEach((row) => {
           this.$set(row, 'vgtSelected', true);
         });
       });
@@ -1108,20 +1109,19 @@ export default {
     },
 
     toggleSelectGroup(event, headerRow) {
-      const { groupChildObject } = this;
-      each(headerRow[groupChildObject], (row) => {
+      headerRow.children.forEach((row) => {
         this.$set(row, 'vgtSelected', event.checked);
       });
     },
 
     changePage(value) {
-      let { enabled, position } = this.paginationOptions
+      const enabled = this.paginate;
       let { paginationBottom, paginationTop } = this.$refs
       if (enabled) {
-        if ((position === 'top' || position === 'both') && paginationTop) {
+        if (this.paginateOnTop && paginationTop) {
           paginationTop.currentPage = value
         }
-        if ((position === 'bottom' || position === 'both') && paginationBottom) {
+        if (this.paginateOnBottom && paginationBottom) {
           paginationBottom.currentPage = value
         }
         // we also need to set the currentPage
@@ -1252,7 +1252,7 @@ export default {
         this.handleSearch();
         // we reset the filteredRows here because
         // we want to search across everything.
-        this.filteredRows = cloneDeep(this.originalRows);
+        this.filteredRows = JSON.parse(JSON.stringify(this.originalRows));
         this.forceSearch = true;
         this.sortChanged = true;
       }
@@ -1366,8 +1366,7 @@ export default {
       // this is invoked either as a result of changing filters
       // or as a result of modifying rows.
       this.columnFilters = columnFilters;
-      let computedRows = cloneDeep(this.originalRows);
-      const { groupChildObject } = this;
+      let computedRows = JSON.parse(JSON.stringify(this.originalRows));
 
       // do we have a filter to care about?
       // if not we don't need to do anything
@@ -1409,8 +1408,8 @@ export default {
         for (let i = 0; i < this.typedColumns.length; i++) {
           const col = this.typedColumns[i];
           if (this.columnFilters[fieldKey(col.field)]) {
-            computedRows = each(computedRows, (headerRow) => {
-              const newChildren = headerRow[groupChildObject].filter((row) => {
+            computedRows.forEach((headerRow) => {
+              const newChildren = headerRow.children.filter((row) => {
                 // If column has a custom filter, use that.
                 if (
                   col.filterOptions &&
@@ -1433,7 +1432,7 @@ export default {
                 );
               });
               // should we remove the header?
-              headerRow[groupChildObject] = newChildren;
+              headerRow.children = newChildren;
             });
           }
         }
@@ -1478,8 +1477,7 @@ export default {
     },
 
     handleGrouped(originalRows) {
-      const { groupChildObject } = this;
-      each(originalRows, (headerRow, i) => {
+      originalRows.forEach((headerRow, i) => {
         headerRow.vgt_header_id = i;
         if (
           this.groupOptions.maintainExpanded &&
@@ -1487,7 +1485,7 @@ export default {
         ) {
           this.$set(headerRow, 'vgtIsExpanded', true);
         }
-        each(headerRow[groupChildObject], (childRow) => {
+        headerRow.children.forEach((childRow) => {
           childRow.vgt_id = i;
         });
       });
@@ -1513,6 +1511,7 @@ export default {
         allLabel,
         setCurrentPage,
         mode,
+        infoFn,
       } = this.paginationOptions;
 
       if (typeof enabled === 'boolean') {
@@ -1579,6 +1578,10 @@ export default {
           this.changePage(setCurrentPage);
         }, 500);
       }
+
+      if (typeof infoFn === 'function') {
+        this.paginationInfoFn = infoFn;
+      }
     },
 
     initializeSearch() {
@@ -1617,25 +1620,30 @@ export default {
     },
 
     initializeSort() {
-      const { enabled, initialSortBy } = this.sortOptions;
+      const { enabled, initialSortBy, multipleColumns } = this.sortOptions;
+      const initSortBy = JSON.parse(JSON.stringify(initialSortBy || {}));
 
       if (typeof enabled === 'boolean') {
         this.sortable = enabled;
       }
 
+      if (typeof multipleColumns === 'boolean') {
+        this.multipleColumnSort = multipleColumns;
+      }
+
       //* initialSortBy can be an array or an object
-      if (typeof initialSortBy === 'object') {
+      if (typeof initSortBy === 'object') {
         const ref = this.fixedHeader
           ? this.$refs['table-header-secondary']
           : this.$refs['table-header-primary'];
-        if (Array.isArray(initialSortBy)) {
-          ref.setInitialSort(initialSortBy);
+        if (Array.isArray(initSortBy)) {
+          ref.setInitialSort(initSortBy);
         } else {
           const hasField = Object.prototype.hasOwnProperty.call(
-            initialSortBy,
+            initSortBy,
             'field'
           );
-          if (hasField) ref.setInitialSort([initialSortBy]);
+          if (hasField) ref.setInitialSort([initSortBy]);
         }
       }
     },
