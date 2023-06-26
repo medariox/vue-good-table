@@ -58,5 +58,8 @@
     "vue": "^2.6.10",
     "vue-template-compiler": "^2.6.10",
     "vuepress": "^1.0.0-rc.1"
+  },
+  "resolutions": {
+    "node-sass/node-gyp": "^9.4.0"
   }
 }
